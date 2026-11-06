@@ -1,0 +1,353 @@
+openapi: 3.0.3
+info:
+  title: CivicFix API
+  description: >
+    Community Problem Reporting and Resolution Platform (Hackathon PS-14).
+    Enforces strict role permissions (Visitor, Citizen, Staff, Admin, Super Admin),
+    controlled state machine transitions, two-person sign-off, distributed soft-locking,
+    optimistic concurrency, and append-only audit trails.
+  version: 1.0.0
+servers:
+  - url: http://localhost:5000/api
+    description: Local Development Server
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: civicfix_token
+
+  schemas:
+    UserRole:
+      type: string
+      enum: [citizen, staff, admin, super_admin]
+    ReportStatus:
+      type: string
+      enum:
+        - submitted
+        - under_review
+        - verified
+        - assigned
+        - in_progress
+        - work_completed
+        - resolved
+        - rejected
+        - duplicate
+        - reopened
+    Priority:
+      type: string
+      enum: [critical, high, medium, low]
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          $ref: '#/components/schemas/UserRole'
+        departmentId:
+          type: string
+          nullable: true
+        departmentName:
+          type: string
+          nullable: true
+        mfaEnabled:
+          type: boolean
+        status:
+          type: string
+          enum: [active, invited, deactivated]
+        lastLogin:
+          type: string
+          format: date-time
+
+    ReportPublic:
+      type: object
+      properties:
+        id:
+          type: string
+        referenceNumber:
+          type: string
+        title:
+          type: string
+        category:
+          type: string
+        priority:
+          $ref: '#/components/schemas/Priority'
+        status:
+          $ref: '#/components/schemas/ReportStatus'
+        coarsenedLat:
+          type: number
+          format: float
+        coarsenedLng:
+          type: number
+          format: float
+        ward:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ReportDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        referenceNumber:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        priority:
+          $ref: '#/components/schemas/Priority'
+        priorityScore:
+          type: integer
+        status:
+          $ref: '#/components/schemas/ReportStatus'
+        version:
+          type: integer
+        exactLat:
+          type: number
+          format: float
+          nullable: true
+        exactLng:
+          type: number
+          format: float
+          nullable: true
+        coarsenedLat:
+          type: number
+          format: float
+        coarsenedLng:
+          type: number
+          format: float
+        ward:
+          type: string
+        addressHint:
+          type: string
+        reporterId:
+          type: string
+          nullable: true
+        reporterName:
+          type: string
+          nullable: true
+        assigneeId:
+          type: string
+          nullable: true
+        assigneeName:
+          type: string
+          nullable: true
+        lockOwner:
+          type: string
+          nullable: true
+        lockExpiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        isLockedByOther:
+          type: boolean
+        responseDueAt:
+          type: string
+          format: date-time
+        resolutionDueAt:
+          type: string
+          format: date-time
+        isSlaBreached:
+          type: boolean
+        images:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              url:
+                type: string
+              isProof:
+                type: boolean
+              uploadedByRole:
+                $ref: '#/components/schemas/UserRole'
+        timeline:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              actorName:
+                type: string
+              role:
+                $ref: '#/components/schemas/UserRole'
+              fromStatus:
+                $ref: '#/components/schemas/ReportStatus'
+              toStatus:
+                $ref: '#/components/schemas/ReportStatus'
+              note:
+                type: string
+              proofImageUrl:
+                type: string
+                nullable: true
+              createdAt:
+                type: string
+                format: date-time
+
+paths:
+  /auth/login:
+    post:
+      summary: Citizen login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Logged in successfully
+        '401':
+          description: Invalid credentials
+
+  /auth/staff-login:
+    post:
+      summary: Step 1 of staff/admin/superadmin login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Password verified, requires MFA code
+        '401':
+          description: Invalid credentials
+
+  /auth/mfa-verify:
+    post:
+      summary: Step 2 of staff/admin login with MFA code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tempToken, code]
+              properties:
+                tempToken:
+                  type: string
+                code:
+                  type: string
+      responses:
+        '200':
+          description: MFA verified, full session token returned
+        '403':
+          description: Invalid MFA code
+
+  /public/dashboard:
+    get:
+      summary: Public statistics and metrics
+      responses:
+        '200':
+          description: Aggregated public metrics
+
+  /public/reports-map:
+    get:
+      summary: Public map markers (coarsened to 3 decimals, no reporter details)
+      responses:
+        '200':
+          description: List of coarsened reports
+
+  /reports:
+    post:
+      summary: Submit a new problem report (Citizen, Admin, Super Admin)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, description, categoryId]
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                categoryId:
+                  type: string
+                exactLat:
+                  type: number
+                exactLng:
+                  type: number
+                ward:
+                  type: string
+                addressHint:
+                  type: string
+                images:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Report created
+
+  /admin/reports/{id}/resolve:
+    post:
+      summary: Final sign-off to Resolved (Admin / Super Admin only, two-person rule)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [note, proofImageId, version]
+              properties:
+                note:
+                  type: string
+                  minLength: 10
+                proofImageId:
+                  type: string
+                version:
+                  type: integer
+      responses:
+        '200':
+          description: Report resolved
+        '400':
+          description: Two-person rule violation or missing proof/note
+        '409':
+          description: Version conflict
+
